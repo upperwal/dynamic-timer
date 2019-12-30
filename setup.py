@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="dytimer",
-    version="0.0.4",
+    version="0.0.5",
     author="Abhishek Upperwal",
     author_email="mesh@soket.in",
     description="Dynamic timer to learn the update frequency of a resource on the web",
