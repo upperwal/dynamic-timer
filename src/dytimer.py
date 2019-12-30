@@ -10,47 +10,48 @@ from deepdiff import DeepDiff
 
 WAIT_FACTOR = 10
 DUP_FACTOR = 1.6
-ERR_WAIT_MAX = 3600
+WAIT_MAX = 3600
 
 class DynamicTimer:
-    def __init__(self, name, start=50):
+    def __init__(self, name, start_wait_time=50, wait_time_min = 2, wait_time_max = WAIT_MAX):
         self.name = name
-        self.wait_time = start
-        self.start = start
+        self.wait_time = start_wait_time
+        self.start = start_wait_time
 
         self.cycle = 0
         self.old_hash = {}
         self.old_text = {}
         self.force_sleep = 0
+        self.wait_time_min = wait_time_min
+        self.wait_time_max = wait_time_max
 
         self.time_since_last_update = 0
     
-    def register_dup_data(self):
+    def register_dup_data(self, penalty = DUP_FACTOR, penalty_weight = 0.2):
         old = self.wait_time
         self.time_since_last_update += self.wait_time
-        self.wait_time = int(math.ceil((0.8 * self.wait_time + 0.2 * self.wait_time * DUP_FACTOR)))
+        new_time = int(math.ceil(((1 - penalty_weight) * self.wait_time + penalty_weight * self.wait_time * penalty)))
+        self.wait_time = new_time
+        self.check_min_max()
         print('[DUP Inc] Changing WT from ' + str(old) + ' -> ' + str(self.wait_time) + ' sec [' + self.name + ']')
 
-    def register_fresh_data(self):
+    def register_fresh_data(self, early_hit_reward = 0.9, delay_hit_penalty = 0.2):
         old = self.wait_time
         if self.time_since_last_update > 0:
-            self.wait_time = int(0.8 * self.wait_time + 0.2 * self.time_since_last_update)
+            self.wait_time = int((1 - delay_hit_penalty) * self.wait_time + delay_hit_penalty * self.time_since_last_update)
         else:
             self.cycle += 1
             if self.cycle == 1:
                 return
-            self.wait_time = int(0.9 * self.wait_time)
-            if self.wait_time < 2:
-                self.wait_time = 2
+            self.wait_time = int(early_hit_reward * self.wait_time)
+        self.check_min_max()
         print('Changing WT from ' + str(old) + ' -> ' + str(self.wait_time) + ' sec [' + self.name + ']')
         self.time_since_last_update = 0
 
-    def register_error(self):
+    def register_error(self, penalty_weight = WAIT_FACTOR):
         old = self.wait_time
-        self.wait_time *= WAIT_FACTOR
-        if self.wait_time > ERR_WAIT_MAX:
-            self.wait_time = ERR_WAIT_MAX
-            return
+        self.wait_time *= penalty_weight
+        self.check_min_max()
         print('[ERR Inc] Changing WT from ' + str(old) + ' -> ' + str(self.wait_time) + ' sec [' + self.name + ']')
 
     def reset(self):
@@ -69,8 +70,19 @@ class DynamicTimer:
     
     def __str__(self):
         return 'wait[' + str(self.wait_time) + ' sec] - since[' + str(self.time_since_last_update) + ']'
+
+    def check_min_max(self):
+        if self.wait_time < self.wait_time_min:
+            print('New time dropped below min time. Reverting to min time.')
+            self.wait_time = self.wait_time_min
+            return True
+        elif self.wait_time > self.wait_time_max:
+            print('New time is more than max wait time. Reverting to max time.')
+            self.wait_time = self.wait_time_max
+            return True
+        return False
     
-    def is_duplicate(self, data, tag='default', check_json_deep=False):
+    def is_duplicate(self, data, tag='default', check_json_deep=False, update_dup = True):
         new_hash = hashlib.md5(data).hexdigest()
         if tag not in self.old_hash:
             self.old_hash[tag] = new_hash
@@ -78,16 +90,17 @@ class DynamicTimer:
             return False
         
         if self.old_hash[tag] == new_hash:
-            self.register_dup_data()
+            if update_dup:
+                self.register_dup_data()
             return True
         else:
             if check_json_deep:
                 a = json.loads(self.old_text[tag])
                 b = json.loads(data)
                 diff_val = DeepDiff(a, b, ignore_order=True)
-                print(diff_val)
                 if not diff_val:
-                    self.register_dup_data()
+                    if update_dup:
+                        self.register_dup_data()
                     return True
             self.old_hash[tag] = new_hash
             self.old_text[tag] = data
